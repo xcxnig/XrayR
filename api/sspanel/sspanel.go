@@ -18,12 +18,9 @@ import (
 )
 
 var (
-	firstPortRe   = regexp.MustCompile(`(?m)port=(?P<outport>\d+)#?`) // First Port
-	secondPortRe  = regexp.MustCompile(`(?m)port=\d+#(\d+)`)          // Second Port
-	hostRe        = regexp.MustCompile(`(?m)host=([\w\.]+)\|?`)       // Host
-	enableXtlsRe  = regexp.MustCompile(`(?m)enable_xtls=(\w+)\|?`)    // EnableXtls
-	enableVlessRe = regexp.MustCompile(`(?m)enable_vless=(\w+)\|?`)   // EnableVless
-
+	firstPortRe  = regexp.MustCompile(`(?m)port=(?P<outport>\d+)#?`) // First Port
+	secondPortRe = regexp.MustCompile(`(?m)port=\d+#(\d+)`)          // Second Port
+	hostRe       = regexp.MustCompile(`(?m)host=([\w\.]+)\|?`)       // Host
 )
 
 // APIClient create a api client to the panel.
@@ -60,7 +57,7 @@ func New(apiConfig *api.Config) *APIClient {
 			log.Print(v.Err)
 		}
 	})
-	client.SetHostURL(apiConfig.APIHost)
+	client.SetBaseURL(apiConfig.APIHost)
 	// Create Key for each requests
 	client.SetQueryParam("key", apiConfig.Key)
 	// Add support for muKey
@@ -104,7 +101,7 @@ func readLocalRuleList(path string) (LocalRuleList []api.DetectRule) {
 		for fileScanner.Scan() {
 			LocalRuleList = append(LocalRuleList, api.DetectRule{
 				ID:      -1,
-				Pattern: fileScanner.Text(),
+				Pattern: regexp.MustCompile(fileScanner.Text()),
 			})
 		}
 		// handle first encountered error while reading
@@ -171,7 +168,18 @@ func (c *APIClient) GetNodeInfo() (nodeInfo *api.NodeInfo, err error) {
 	}
 
 	// New sspanel API
-	if nodeInfoResponse.Version == "2021.11" && !c.DisableCustomConfig {
+	disableCustomConfig := c.DisableCustomConfig
+	if nodeInfoResponse.Version == "2021.11" && !disableCustomConfig {
+		// Check if custom_config is empty
+		if configString, err := json.Marshal(nodeInfoResponse.CustomConfig); err != nil || string(configString) == "[]" {
+			log.Printf("custom_config is empty! take config from address now.")
+			disableCustomConfig = true
+		}
+	} else {
+		disableCustomConfig = true
+	}
+
+	if !disableCustomConfig {
 		nodeInfo, err = c.ParseSSPanelNodeInfo(nodeInfoResponse)
 		if err != nil {
 			res, _ := json.Marshal(nodeInfoResponse)
@@ -332,7 +340,7 @@ func (c *APIClient) GetNodeRule() (*[]api.DetectRule, error) {
 	for _, r := range *ruleListResponse {
 		ruleList = append(ruleList, api.DetectRule{
 			ID:      r.ID,
-			Pattern: r.Content,
+			Pattern: regexp.MustCompile(r.Content),
 		})
 	}
 	return &ruleList, nil
@@ -724,9 +732,6 @@ func (c *APIClient) ParseSSPanelNodeInfo(nodeInfoResponse *NodeInfoResponse) (*a
 
 	nodeConfig := new(CustomConfig)
 	json.Unmarshal(nodeInfoResponse.CustomConfig, nodeConfig)
-	if nodeConfig == nil {
-		return nil, fmt.Errorf("No custom config found")
-	}
 
 	if c.SpeedLimit > 0 {
 		speedlimit = uint64((c.SpeedLimit * 1000000) / 8)
